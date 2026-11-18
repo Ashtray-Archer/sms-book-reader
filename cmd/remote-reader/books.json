@@ -1,0 +1,22 @@
+[
+  {
+    "id":"nostromo",
+    "title":"Nostromo",
+    "author":"Joseph Conrad",
+    "aliases":["nostromo a tale of the seaboard"],
+    "source_url":"https://raw.githubusercontent.com/GITenberg/Nostromo--A-Tale-of-the-Seaboard_2021/85749ffbe6ace88e5fb171e524b5f0fee04c44bd/2021-0.txt",
+    "source_git_blob_sha1":"aa01da0b011767f84b1f5bc3e491d8fbd7d87615",
+    "start_after":"CHAPTER ONE",
+    "source_page":"https://www.gutenberg.org/ebooks/2021"
+  },
+  {
+    "id":"alice",
+    "title":"Alice's Adventures in Wonderland",
+    "author":"Lewis Carroll",
+    "aliases":["alice", "alice in wonderland", "alice's adventures in wonderland"],
+    "source_url":"https://raw.githubusercontent.com/GITenberg/Alice-s-Adventures-in-Wonderland_11/7f18748e114b994d5d9454d5793581bc0b9cf9d7/11-0.txt",
+    "source_git_blob_sha1":"0f25e9af379233267a09623e0c650472f9e463ea",
+    "start_after":"CHAPTER I. Down the Rabbit-Hole",
+    "source_page":"https://www.gutenberg.org/ebooks/11"
+  }
+]

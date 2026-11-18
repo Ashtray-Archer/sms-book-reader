@@ -1,0 +1,19 @@
+name: Remote book reader (host acceptance)
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build -trimpath -o remote-reader ./cmd/remote-reader
+      - run: ./remote-reader books
