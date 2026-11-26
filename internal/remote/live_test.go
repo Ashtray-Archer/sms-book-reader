@@ -27,14 +27,19 @@ func TestLivePinnedBooks(t *testing.T) {
 	for _, tc := range []struct{ id, beginning string }{
 		{"nostromo", "In the time of Spanish rule"},
 		{"alice", "Alice was beginning to get very tired"},
+		{"infierno", "A la mitad del viaje de nuestra vida"},
 	} {
 		b := catalog.byID[tc.id]
-		chunks, err := texts.Passages(context.Background(), b)
+		doc, err := texts.load(context.Background(), b)
 		if err != nil {
 			t.Fatalf("live %s: %v", tc.id, err)
 		}
-		if len(chunks) < 100 || !strings.Contains(chunks[0], tc.beginning) {
-			t.Fatalf("live %s wrong passages: %d, %q", tc.id, len(chunks), chunks[0])
+		first, ok := doc.next(0, usual)
+		if !ok || len(doc.units) < 100 || !strings.Contains(doc.body[first.Start:first.End], tc.beginning) {
+			t.Fatalf("live %s wrong opening", tc.id)
+		}
+		if tc.id == "infierno" && doc.units[len(doc.units)-1].section != "Canto 34" {
+			t.Fatal("missing final canto")
 		}
 	}
 }

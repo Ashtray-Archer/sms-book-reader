@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,21 +24,23 @@ type Texts struct {
 	Client   *http.Client
 	CacheDir string
 	mu       sync.Mutex
-	loaded   map[string][]string
+	loaded   map[string]*document
 }
 
-func (t *Texts) Passages(ctx context.Context, b *Book) ([]string, error) {
+func (t *Texts) load(ctx context.Context, b *Book) (*document, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.loaded == nil {
-		t.loaded = make(map[string][]string)
+		t.loaded = make(map[string]*document)
 	}
-	if chunks := t.loaded[b.ID]; len(chunks) != 0 {
-		return chunks, nil
+	key := b.ID + "-" + b.SourceBlob
+	if doc := t.loaded[key]; doc != nil {
+		return doc, nil
 	}
-	path := filepath.Join(t.CacheDir, "books", b.ID+"-"+b.SourceBlob+".txt")
+	path := filepath.Join(t.CacheDir, "books", key+".txt")
 	raw, err := os.ReadFile(path)
-	if err != nil || !verifyBlob(raw, b.SourceBlob) || len(raw) > maxSourceBytes {
+	fetched := err != nil || !verifyBlob(raw, b.SourceBlob)
+	if fetched {
 		client := t.Client
 		if client == nil {
 			client = &http.Client{Timeout: 15 * time.Second}
@@ -63,24 +64,18 @@ func (t *Texts) Passages(ctx context.Context, b *Book) ([]string, error) {
 		if !verifyBlob(raw, b.SourceBlob) {
 			return nil, fmt.Errorf("source %s Git blob identity mismatch", b.ID)
 		}
-		// Source parsing happens before caching, so an invalid complete text
-		// is never retained merely because its source hash matches.
-		chunks, err := parseText(raw, b.StartAfter)
-		if err != nil {
-			return nil, err
-		}
-		if err := atomicWrite(path, raw); err != nil {
-			return nil, fmt.Errorf("caching book: %w", err)
-		}
-		t.loaded[b.ID] = chunks
-		return chunks, nil
 	}
-	chunks, err := parseText(raw, b.StartAfter)
+	doc, err := parseDocument(raw, b)
 	if err != nil {
 		return nil, err
 	}
-	t.loaded[b.ID] = chunks
-	return chunks, nil
+	if fetched {
+		if err := atomicWrite(path, raw); err != nil {
+			return nil, fmt.Errorf("caching book: %w", err)
+		}
+	}
+	t.loaded[key] = doc
+	return doc, nil
 }
 
 func verifyBlob(raw []byte, expected string) bool {
@@ -93,63 +88,7 @@ func verifyBlob(raw []byte, expected string) bool {
 	return hex.EncodeToString(h.Sum(nil)) == expected
 }
 
-// parseText insists on the complete source's Gutenberg delimiters and a
-// book-specific starting heading; it never sends the legal boilerplate.
-func parseText(raw []byte, startAfter string) ([]string, error) {
-	if !utf8.Valid(raw) {
-		return nil, errors.New("source is not UTF-8")
-	}
-	lines := strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n")
-	start, end := -1, -1
-	for i, line := range lines {
-		s := strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(line, "\ufeff")))
-		if strings.HasPrefix(s, "*** START OF") && strings.Contains(s, "PROJECT GUTENBERG EBOOK") {
-			start = i + 1
-		}
-		if start != -1 && strings.HasPrefix(s, "*** END OF") && strings.Contains(s, "PROJECT GUTENBERG EBOOK") {
-			end = i
-			break
-		}
-	}
-	if start < 0 || end <= start {
-		return nil, errors.New("source lacks complete Gutenberg boundaries")
-	}
-	foundHeading := false
-	for i := start; i < end; i++ {
-		if strings.TrimSpace(lines[i]) == startAfter {
-			start = i + 1
-			foundHeading = true
-			break
-		}
-	}
-	if !foundHeading || start >= end {
-		return nil, errors.New("source lacks starting heading")
-	}
-	var chunks []string
-	var paragraph []string
-	flush := func() {
-		if len(paragraph) > 0 {
-			chunks = append(chunks, splitWords(strings.Join(paragraph, " "), MaxPassageRunes)...)
-			paragraph = nil
-		}
-	}
-	for _, line := range lines[start:end] {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			flush()
-		} else {
-			paragraph = append(paragraph, line)
-		}
-	}
-	flush()
-	if len(chunks) == 0 {
-		return nil, errors.New("source has no book passages")
-	}
-	return chunks, nil
-}
-
-// splitWords preserves every rune, splitting only at word boundaries unless
-// a single word exceeds the limit. Each reply step is strictly bounded.
+// Preserve the previous release's word wrapping only to locate saved pages.
 func splitWords(paragraph string, maxRunes int) []string {
 	var chunks []string
 	var line string

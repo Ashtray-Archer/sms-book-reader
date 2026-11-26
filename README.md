@@ -1,6 +1,12 @@
-# SMS Book Reader — mock jog
+# SMS Book Reader
 
-A small Go reader for flip phones. **There is no SMS gateway yet.** Commands run locally or through HTTP so `curl` or ICU can exercise the same reader without choosing an SMS provider.
+Text a book number to open a passage. Send `0` to keep reading and `00` to reread it. You can stop over a word, look at Dante’s Italian, and come back to the same place. The shelf has Conrad’s *Nostromo*, Carroll’s *Alice’s Adventures in Wonderland*, and Aranda y Sanjuán’s Spanish *Infierno*.
+
+From a checkout with Go 1.23 or later, run `go run ./cmd/remote-reader` for a local conversation. The same reader accepts inbound HTTP messages. Carrier delivery is pending. [Reading by text and a sample conversation](REMOTE_READER.md)
+
+## Earlier mock jog
+
+The examples below use the original fixture-based `sms-book-reader` binary.
 
 One bookmark **per reader and book**. A short undo history is attached to each bookmark; these are not additional named cursors. Reader records are plain JSON files, replaced atomically, in `SMS_READER_HOME` (default `~/.local/state/sms-book-reader`). The server serializes commands in one process. This mock is **not** a multi-process transactional service.
 

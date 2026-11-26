@@ -3,9 +3,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -22,7 +24,42 @@ import (
 var files embed.FS
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: remote-reader books | message SENDER 'read nostromo' | serve [127.0.0.1:8788]")
+	fmt.Fprintln(os.Stderr, "usage: remote-reader [chat [SENDER]] | books | message SENDER 'hi' | serve [127.0.0.1:8788]")
+}
+
+func reply(handler sms.Handler, sender, body string, out io.Writer) error {
+	messages, err := handler.Handle(context.Background(), sms.Inbound{From: sender, Body: body})
+	if err != nil {
+		return err
+	}
+	for _, m := range messages {
+		if _, err := fmt.Fprintln(out, m.Body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// A local conversation exercises the very same turns as /inbound. On a
+// terminal, Return is a convenient alias for the flip phone's zero key.
+func chat(handler sms.Handler, sender string, in io.Reader, out io.Writer) error {
+	scanner := bufio.NewScanner(in)
+	body := "hi"
+	for {
+		if err := reply(handler, sender, body, out); err != nil {
+			fmt.Fprintln(out, err)
+		}
+		if !scanner.Scan() {
+			return scanner.Err()
+		}
+		body = strings.TrimSpace(scanner.Text())
+		if strings.EqualFold(body, "quit") {
+			return nil
+		}
+		if body == "" {
+			body = "0"
+		}
+	}
 }
 
 func main() {
@@ -48,10 +85,21 @@ func main() {
 	dispatch := sms.Dispatch{Default: reader, Services: map[string]sms.Handler{"book": reader}}
 	args := os.Args[1:]
 	if len(args) == 0 {
-		usage()
-		os.Exit(2)
+		args = []string{"chat"}
 	}
 	switch args[0] {
+	case "chat":
+		sender := "local"
+		if len(args) == 2 {
+			sender = args[1]
+		}
+		if len(args) > 2 {
+			usage()
+			os.Exit(2)
+		}
+		if err := chat(dispatch, sender, os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
 	case "books":
 		fmt.Println(catalog.List())
 	case "message":
@@ -59,12 +107,8 @@ func main() {
 			usage()
 			os.Exit(2)
 		}
-		out, err := dispatch.Handle(context.Background(), sms.Inbound{From: args[1], Body: strings.Join(args[2:], " ")})
-		if err != nil {
+		if err := reply(dispatch, args[1], strings.Join(args[2:], " "), os.Stdout); err != nil {
 			log.Fatal(err)
-		}
-		for _, m := range out {
-			fmt.Println(m.Body)
 		}
 	case "serve":
 		addr := "127.0.0.1:8788"

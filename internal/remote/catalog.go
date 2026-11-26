@@ -15,6 +15,7 @@ var safeBookID = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
 var gitBlobID = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 type Book struct {
+	Edition    string   `json:"edition,omitempty"`
 	ID         string   `json:"id"`
 	Title      string   `json:"title"`
 	Author     string   `json:"author"`
@@ -23,6 +24,7 @@ type Book struct {
 	SourceBlob string   `json:"source_git_blob_sha1"`
 	StartAfter string   `json:"start_after"`
 	SourcePage string   `json:"source_page"`
+	Format     string   `json:"format,omitempty"`
 }
 
 type Catalog struct {
@@ -44,6 +46,9 @@ func ParseCatalog(raw []byte) (*Catalog, error) {
 		if !safeBookID.MatchString(b.ID) || b.Title == "" || b.Author == "" ||
 			!gitBlobID.MatchString(b.SourceBlob) || b.StartAfter == "" || c.byID[b.ID] != nil {
 			return nil, fmt.Errorf("incomplete/duplicate catalog entry %q", b.ID)
+		}
+		if b.Format != "" && b.Format != "aranda-infierno" {
+			return nil, fmt.Errorf("unknown text format for %q", b.ID)
 		}
 		u, err := url.Parse(b.SourceURL)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
@@ -73,11 +78,10 @@ func (c *Catalog) Find(s string) *Book {
 
 func (c *Catalog) List() string {
 	var out strings.Builder
-	out.WriteString("Books available:\n")
 	for i, b := range c.Books {
-		fmt.Fprintf(&out, "%d. %s — %s\n", i+1, b.Title, b.Author)
+		fmt.Fprintf(&out, "%d %s - %s\n", i+1, b.Title, b.Author)
 	}
-	out.WriteString("Text READ <title>, e.g. READ NOSTROMO.")
+	out.WriteString("Pick one. 0 next, 00 reread, * note, # books, ? help")
 	return out.String()
 }
 

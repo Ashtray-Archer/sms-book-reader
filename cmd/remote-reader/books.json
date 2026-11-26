@@ -18,5 +18,17 @@
     "source_git_blob_sha1":"0f25e9af379233267a09623e0c650472f9e463ea",
     "start_after":"CHAPTER I. Down the Rabbit-Hole",
     "source_page":"https://www.gutenberg.org/ebooks/11"
+  },
+  {
+    "id":"infierno",
+    "title":"Infierno",
+    "author":"Dante Alighieri",
+    "edition":"Aranda y Sanjuán",
+    "aliases":["dante", "inferno", "el infierno"],
+    "format":"aranda-infierno",
+    "source_url":"https://raw.githubusercontent.com/walnut-burgundy/mi-Dante/40a1a17e9ad358d44300c0f4ebdb8e43444017e4/traducciones/Manuel-Aranda-y-Sanjuan/Infierno.txt",
+    "source_git_blob_sha1":"dbc7381127a6021f6324e8c87eb47f79f9a7faaf",
+    "start_after":"_CANTO PRIMERO_",
+    "source_page":"https://github.com/walnut-burgundy/mi-Dante/tree/40a1a17e9ad358d44300c0f4ebdb8e43444017e4/traducciones/Manuel-Aranda-y-Sanjuan"
   }
 ]
