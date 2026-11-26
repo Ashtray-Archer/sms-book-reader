@@ -21,9 +21,23 @@ type Receipt struct {
 }
 
 type State struct {
-	Current   string         `json:"current,omitempty"`
-	Positions map[string]int `json:"positions"` // index of last delivered chunk
-	Recent    []Receipt      `json:"recent,omitempty"`
+	Current   string              `json:"current,omitempty"`
+	Positions map[string]int      `json:"positions,omitempty"` // previous format, migrated when that book is opened
+	Bookmarks map[string]bookmark `json:"bookmarks,omitempty"`
+	Recent    []Receipt           `json:"recent,omitempty"`
+}
+
+// The range identifies the words the sender actually saw, including any
+// change of reading length. Offsets are bytes in the normalized UTF-8 edition.
+type span struct {
+	Start int `json:"start"`
+	End   int `json:"end"`
+}
+
+type bookmark struct {
+	Source string `json:"source"`
+	Page   span   `json:"page"`
+	Trail  []span `json:"trail,omitempty"`
 }
 
 type Store struct {
@@ -38,7 +52,7 @@ func (s Store) path(sender string) string {
 func (s Store) Load(sender string) (*State, error) {
 	data, err := os.ReadFile(s.path(sender))
 	if errors.Is(err, os.ErrNotExist) {
-		return &State{Positions: make(map[string]int)}, nil
+		return &State{Bookmarks: make(map[string]bookmark)}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -47,8 +61,8 @@ func (s Store) Load(sender string) (*State, error) {
 	if err := json.Unmarshal(data, &st); err != nil {
 		return nil, fmt.Errorf("reading bookmark: %w", err)
 	}
-	if st.Positions == nil {
-		st.Positions = make(map[string]int)
+	if st.Bookmarks == nil {
+		st.Bookmarks = make(map[string]bookmark)
 	}
 	return &st, nil
 }

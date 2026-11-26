@@ -36,6 +36,10 @@ func testService(t *testing.T) (*Service, *httptest.Server, *atomic.Int32) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	infierno, err := os.ReadFile("../../testdata/infierno-excerpt.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	count := new(atomic.Int32)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count.Add(1)
@@ -44,6 +48,8 @@ func testService(t *testing.T) (*Service, *httptest.Server, *atomic.Int32) {
 			_, _ = w.Write(nostromo)
 		case "/alice":
 			_, _ = w.Write(alice)
+		case "/infierno":
+			_, _ = w.Write(infierno)
 		default:
 			http.NotFound(w, r)
 		}
@@ -51,6 +57,7 @@ func testService(t *testing.T) (*Service, *httptest.Server, *atomic.Int32) {
 	books := []Book{
 		{ID: "nostromo", Title: "Nostromo", Author: "Joseph Conrad", Aliases: []string{"nostromo a tale of the seaboard"}, SourceURL: server.URL + "/nostromo", SourceBlob: gitHash(nostromo), StartAfter: "CHAPTER ONE"},
 		{ID: "alice", Title: "Alice's Adventures in Wonderland", Author: "Lewis Carroll", Aliases: []string{"alice in wonderland", "alice"}, SourceURL: server.URL + "/alice", SourceBlob: gitHash(alice), StartAfter: "CHAPTER I. Down the Rabbit-Hole"},
+		{ID: "infierno", Title: "Infierno", Author: "Dante Alighieri", Edition: "Aranda y Sanjuán", Format: "aranda-infierno", StartAfter: "_CANTO PRIMERO_", SourceURL: server.URL + "/infierno", SourceBlob: gitHash(infierno)},
 	}
 	raw, err := json.Marshal(books)
 	if err != nil {
@@ -91,7 +98,7 @@ func TestRemoteFullPassagesAndDurablePositions(t *testing.T) {
 		t.Fatalf("resume changed position: %q / %q", first, got)
 	}
 	second := send(t, r, "ada", "n3", "keep reading")
-	if second == first || !strings.Contains(second, "ox-hides") {
+	if !strings.HasSuffix(first, "ox-hides and indigo.") || !strings.HasPrefix(second, "The clumsy deep-sea") {
 		t.Fatalf("did not advance: %q", second)
 	}
 	if other := send(t, r, "ben", "b1", "read 1"); other != first {
@@ -129,7 +136,7 @@ func TestRemoteFullPassagesAndDurablePositions(t *testing.T) {
 		t.Fatalf("persistent idempotency receipt failed after restart: %q", got)
 	}
 	state, err := restarted.Store.Load("ada")
-	if err != nil || state.Positions["nostromo"] < 1 || state.Positions["alice"] != 0 {
+	if err != nil || state.Bookmarks["nostromo"].Page.Start == 0 || state.Bookmarks["alice"].Page.Start != 0 {
 		t.Fatalf("restart positions: %+v, %v", state, err)
 	}
 	path := restarted.Store.path("ada")
@@ -151,7 +158,7 @@ func TestCannotAdvanceOnBadSource(t *testing.T) {
 		t.Fatalf("source identity must be checked: %v", err)
 	}
 	state, err := r.Store.Load("+15551234567")
-	if err != nil || state.Current != "" || len(state.Positions) != 0 {
+	if err != nil || state.Current != "" || len(state.Bookmarks) != 0 {
 		t.Fatalf("bad source advanced cursor: %+v %v", state, err)
 	}
 	b.SourceBlob = gitHash([]byte("something else"))
@@ -163,7 +170,11 @@ func TestCannotAdvanceOnBadSource(t *testing.T) {
 func TestInboundDedupAndReset(t *testing.T) {
 	r, server, _ := testService(t)
 	defer server.Close()
-	first := send(t, r, "+15551234567", "1", "start reading")
+	menu := send(t, r, "+15551234567", "menu", "start reading")
+	if !strings.Contains(menu, "Pick one") {
+		t.Fatal(menu)
+	}
+	first := send(t, r, "+15551234567", "1", "1")
 	if !strings.Contains(first, "Spanish rule") {
 		t.Fatal(first)
 	}
@@ -182,7 +193,7 @@ func TestInboundDedupAndReset(t *testing.T) {
 	}
 }
 
-func TestChunksAreBoundedAndComplete(t *testing.T) {
+func TestLegacyWrappingIsBoundedAndComplete(t *testing.T) {
 	longWord := strings.Repeat("界", MaxPassageRunes*2+10)
 	original := "one two " + longWord + " and the end"
 	chunks := splitWords(original, MaxPassageRunes)
@@ -202,11 +213,11 @@ func TestChunksAreBoundedAndComplete(t *testing.T) {
 
 func TestParseRejectsMissingMarkersAndNoCache(t *testing.T) {
 	bad := []byte("CHAPTER ONE\nThis is not a complete book")
-	if _, err := parseText(bad, "CHAPTER ONE"); err == nil {
+	if _, err := parseDocument(bad, &Book{StartAfter: "CHAPTER ONE"}); err == nil {
 		t.Fatal("accepted incomplete source")
 	}
 	bad = []byte("*** START OF THIS PROJECT GUTENBERG EBOOK X ***\nCHAPTER ONE\nwords\n*** END OF THIS PROJECT GUTENBERG EBOOK X ***")
-	if _, err := parseText(bad, "CHAPTER TWO"); err == nil {
+	if _, err := parseDocument(bad, &Book{StartAfter: "CHAPTER TWO"}); err == nil {
 		t.Fatal("missing start heading accepted")
 	}
 	// Ensure an actual excerpt's license/footer never appears in a reading chunk.
@@ -214,14 +225,12 @@ func TestParseRejectsMissingMarkersAndNoCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunks, err := parseText(raw, "CHAPTER ONE")
-	if err != nil || len(chunks) < 2 {
-		t.Fatalf("parsing: %v / %d", err, len(chunks))
+	doc, err := parseDocument(raw, &Book{StartAfter: "CHAPTER ONE"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range chunks {
-		if strings.Contains(c, "License boilerplate") || strings.Contains(c, "Project Gutenberg") {
-			t.Fatalf("header/footer leaked: %q", c)
-		}
+	if len(doc.units) < 2 || strings.Contains(doc.body, "License boilerplate") || strings.Contains(doc.body, "Project Gutenberg") {
+		t.Fatalf("unexpected book body: %q", doc.body)
 	}
 }
 
@@ -309,7 +318,7 @@ func TestSourceHTTPFailureDoesNotSaveCursor(t *testing.T) {
 		t.Fatalf("missing remote source should fail without inventing text: %v", err)
 	}
 	st, err := r.Store.Load("ada")
-	if err != nil || st.Current != "" || len(st.Positions) != 0 || len(st.Recent) != 0 {
+	if err != nil || st.Current != "" || len(st.Bookmarks) != 0 || len(st.Recent) != 0 {
 		t.Fatalf("request failure advanced bookmark: %+v %v", st, err)
 	}
 }

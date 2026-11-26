@@ -23,7 +23,7 @@ type Service struct {
 }
 
 func (s *Service) Handle(ctx context.Context, in sms.Inbound) ([]sms.Outbound, error) {
-	if !safeSender.MatchString(in.From) || len(in.Body) == 0 || len(in.Body) > 512 || len(in.ID) > 128 {
+	if !safeSender.MatchString(in.From) || len(in.Body) > 512 || len(in.ID) > 128 {
 		return nil, errors.New("invalid sender, message, or inbound ID")
 	}
 	if s.Catalog == nil || s.Texts == nil {
@@ -64,74 +64,154 @@ func (s *Service) Handle(ctx context.Context, in sms.Inbound) ([]sms.Outbound, e
 	return []sms.Outbound{{To: in.From, Body: answer}}, nil
 }
 
-// answer is transport-independent. A passage is delivered on READ, not merely
-// selected; RESUME/AGAIN are nonadvancing; CONTINUE advances one bounded chunk.
+// The shelf and the conversation use the same handler for HTTP and the CLI.
+// Digits select a book from anywhere. Zero turns a page without typing a title.
 func (s *Service) answer(ctx context.Context, st *State, original string) (string, error) {
-	cmd := normalized(strings.Trim(original, " \r\n\t.!?"))
+	raw := normalized(original)
+	cmd := strings.Trim(strings.TrimSpace(raw), " \t.!?¿¡")
 	cmd = strings.TrimPrefix(cmd, "please ")
 	cmd = strings.TrimSuffix(cmd, " please")
-	switch cmd {
-	case "books", "list", "catalog", "library", "show books", "show me books", "what books do you have", "what books are available":
-		return s.Catalog.List(), nil
-	case "help", "?":
-		return "READ NOSTROMO, READ ALICE, MORE, RESUME, AGAIN, START OVER, BOOKS. Bookmarks are saved automatically.", nil
-	}
-	if cmd == "continue" || cmd == "continue reading" || cmd == "more" || cmd == "next" || cmd == "next passage" || cmd == "keep reading" || cmd == "go on" || cmd == "another passage" || cmd == "keep going" || cmd == "read some more" || cmd == "what happens next" || cmd == "yes" || cmd == "n" {
-		return s.readChunk(ctx, st, st.Current, 1, false)
-	}
-	if cmd == "resume" || cmd == "resume reading" || cmd == "where was i" || cmd == "pick up where i left off" || cmd == "where did i leave off" || cmd == "resume my book" || cmd == "again" || cmd == "repeat" || cmd == "repeat that" {
-		return s.readChunk(ctx, st, st.Current, 0, false)
-	}
-	if cmd == "start over" || cmd == "restart" || cmd == "from the beginning" {
-		return s.readChunk(ctx, st, st.Current, 0, true)
-	}
-	if cmd == "start" || cmd == "start reading" || cmd == "begin reading" {
-		book := st.Current
-		if book == "" {
-			book = s.Catalog.Books[0].ID
+	if raw == "?" || cmd == "help" || cmd == "ayuda" {
+		if st.Current == "" {
+			return s.Catalog.List(), nil
 		}
-		return s.readChunk(ctx, st, book, 0, false)
+		return help(st.Current), nil
+	}
+	switch cmd {
+	case "", "book", "books", "libros", "list", "catalog", "library", "#", "show books", "show me books", "what books do you have", "what books are available":
+		return s.Catalog.List(), nil
+	case "hi", "hello", "hola", "read", "leer", "start", "start reading", "begin reading", "i want to read":
+		return s.turn(ctx, st, st.Current, repeat, usual, "")
+	case "0", "n", "next", "more", "siguiente", "sigue", "otro", "continue", "continue reading", "next passage", "keep reading", "go on", "another passage", "keep going", "read some more", "what happens next", "yes":
+		return s.turn(ctx, st, st.Current, advance, usual, "")
+	case "longer", "more text", "más largo", "mas largo", "un poco más largo", "un poco mas largo":
+		return s.turn(ctx, st, st.Current, advance, long, "")
+	case "shorter", "less text", "más corto", "mas corto", "menos":
+		return s.turn(ctx, st, st.Current, advance, short, "")
+	case "00", "just the text", "solo el texto", "sólo el texto", "again", "otra vez", "repite", "resume", "resume reading", "where was i", "pick up where i left off", "where did i leave off", "resume my book", "repeat", "repeat that":
+		return s.turn(ctx, st, st.Current, repeat, usual, "")
+	case "b", "back", "previous", "atrás", "atras", "anterior":
+		return s.turn(ctx, st, st.Current, previous, usual, "")
+	case "start over", "restart", "from the beginning", "desde el principio":
+		return s.turn(ctx, st, st.Current, restart, usual, "")
+	case "where", "dónde", "donde", "lugar":
+		return s.turn(ctx, st, st.Current, location, usual, "")
+	case "otra", "otra versión", "otra version", "versión de trabajo", "version de trabajo", "compare", "compare translations":
+		return s.turn(ctx, st, st.Current, workingVersion, usual, "")
+	case "it", "italian", "italiano", "original", "in italian", "en italiano":
+		return s.turn(ctx, st, st.Current, italian, usual, "")
+	case "*", "what does that mean", "what does this mean", "qué significa eso", "qué significa esto", "que significa eso", "que significa esto", "note", "notes", "nota", "notas", "explain", "por qué", "why":
+		return s.turn(ctx, st, st.Current, annotation, usual, "")
+	case "pause", "pausa":
+		if st.Current == "" {
+			return s.Catalog.List(), nil
+		}
+		return "Place saved. 00 rereads this passage. 0 continues.", nil
 	}
 	query := cmd
 	for _, prefix := range []string{"i'd like to start reading ", "i would like to start reading ", "i would like to read ", "i'd like to read ", "i want to start reading ", "i want to read ", "can i read ", "could you read ", "can you read me ", "can you read ", "let me read ", "please read me ", "please read ", "begin reading ", "start reading ", "read me ", "read ", "begin ", "start ", "select ", "choose "} {
-		if strings.HasPrefix(cmd, prefix) {
-			query = strings.TrimSpace(strings.TrimPrefix(cmd, prefix))
+		if strings.HasPrefix(query, prefix) {
+			query = strings.TrimSpace(strings.TrimPrefix(query, prefix))
 			break
 		}
 	}
-	query = strings.TrimPrefix(query, "the book ")
-	book := s.Catalog.FindNumber(query)
-	if book == nil {
-		return "I didn't recognize that. Text BOOKS for titles, READ NOSTROMO, MORE, or RESUME.", nil
+	if book := s.Catalog.FindNumber(strings.TrimPrefix(query, "the book ")); book != nil {
+		return s.turn(ctx, st, book.ID, repeat, usual, "")
 	}
-	return s.readChunk(ctx, st, book.ID, 0, false)
+	if st.Current == "" {
+		return s.Catalog.List(), nil
+	}
+	if strings.HasSuffix(raw, "?") {
+		return s.turn(ctx, st, st.Current, annotation, usual, cmd)
+	}
+	for _, prefix := range []string{"?", "¿", "note ", "nota ", "why ", "what ", "qué ", "que ", "por qué ", "por que "} {
+		if strings.HasPrefix(raw, prefix) {
+			return s.turn(ctx, st, st.Current, annotation, usual, cmd)
+		}
+	}
+	return help(st.Current), nil
 }
 
-func (s *Service) readChunk(ctx context.Context, st *State, bookID string, delta int, reset bool) (string, error) {
-	if bookID == "" {
-		return "Choose a book first: text BOOKS or READ NOSTROMO.", nil
+func help(current string) string {
+	keys := "0 next, 00 reread, B back, # books, * notes, WHERE for your place. LONGER or SHORTER changes the next passage. Ask about a word with ?."
+	if current == "infierno" {
+		keys += " IT for Italian. OTRA for the working Spanish."
 	}
+	return keys
+}
+
+type action int
+
+const (
+	repeat action = iota
+	advance
+	previous
+	restart
+	location
+	italian
+	workingVersion
+	annotation
+)
+
+func (s *Service) turn(ctx context.Context, st *State, bookID string, act action, size pace, query string) (string, error) {
 	b := s.Catalog.byID[bookID]
 	if b == nil {
-		return "This book is no longer in the catalog; text BOOKS.", nil
+		return s.Catalog.List(), nil
 	}
-	passages, err := s.Texts.Passages(ctx, b)
+	doc, err := s.Texts.load(ctx, b)
 	if err != nil {
 		return "", fmt.Errorf("%w; bookmark unchanged: %v", sms.ErrUpstream, err)
 	}
-	index, found := st.Positions[b.ID]
-	if !found || reset {
-		index = 0
-	} else if delta != 0 {
-		index += delta
+	mark, found := st.Bookmarks[b.ID]
+	if act == restart {
+		found = false
+	} else if found {
+		if mark.Source != b.SourceBlob || !doc.valid(mark.Page) {
+			return "", errors.New("saved place does not match this edition")
+		}
+	} else if old, ok := st.Positions[b.ID]; ok {
+		mark.Page, found = doc.oldPage(old)
+		if !found {
+			return "", errors.New("invalid bookmark from the previous reader")
+		}
 	}
-	if index >= len(passages) {
-		return "End of " + b.Title + ". Text START OVER or READ another title.", nil
+	if !found {
+		first, _ := doc.next(0, size) // parseDocument requires a nonempty edition
+		mark = bookmark{Page: first}
+	} else {
+		switch act {
+		case advance:
+			next, ok := doc.next(mark.Page.End, size)
+			if !ok {
+				return "End of " + b.Title + ". 00 rereads the ending. # opens your books.", nil
+			}
+			mark.Trail = append(mark.Trail, mark.Page)
+			if len(mark.Trail) > 20 {
+				mark.Trail = mark.Trail[len(mark.Trail)-20:]
+			}
+			mark.Page = next
+		case previous:
+			if n := len(mark.Trail); n > 0 {
+				mark.Page = mark.Trail[n-1]
+				if !doc.valid(mark.Page) {
+					return "", errors.New("invalid saved previous page")
+				}
+				mark.Trail = mark.Trail[:n-1]
+			} else if p, ok := doc.before(mark.Page.Start); ok {
+				mark.Page = p
+			}
+		}
 	}
-	if index < 0 {
-		return "", errors.New("stored reading position is invalid")
-	}
+	mark.Source = b.SourceBlob
 	st.Current = b.ID
-	st.Positions[b.ID] = index
-	return fmt.Sprintf("%s %d/%d\n%s", b.Title, index+1, len(passages), passages[index]), nil
+	st.Bookmarks[b.ID] = mark
+	delete(st.Positions, b.ID)
+	switch act {
+	case location:
+		return doc.place(b, mark.Page), nil
+	case italian, workingVersion, annotation:
+		return doc.studyReply(mark.Page, act, query), nil
+	default:
+		return strings.TrimSpace(doc.body[mark.Page.Start:mark.Page.End]), nil
+	}
 }
